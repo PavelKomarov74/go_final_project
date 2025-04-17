@@ -1,5 +1,7 @@
 package db
 
+import "fmt"
+
 type Task struct {
 	ID      string `json:"id"`                // идентификатор (будет заполнен после вставки)
 	Date    string `json:"date"`              // дата выполнения
@@ -11,10 +13,18 @@ type Task struct {
 // AddTask добавляет задачу в таблицу scheduler и возвращает ID новой записи
 func AddTask(task *Task) (int64, error) {
 	var id int64
+
 	query := `INSERT INTO scheduler (date, title, comment, repeat) VALUES (?, ?, ?, ?)`
+
 	res, err := DB.Exec(query, task.Date, task.Title, task.Comment, task.Repeat)
-	if err == nil {
-		id, err = res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to insert task: %w", err)
 	}
-	return id, err
+
+	id, err = res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to retrieve last insert ID: %w", err)
+	}
+
+	return id, nil
 }

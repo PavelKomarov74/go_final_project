@@ -4,21 +4,28 @@ import (
 	"encoding/json"
 	"go1f/pkg/db"
 	"go1f/pkg/scheduler"
+	"log"
 	"net/http"
 	"time"
 )
 
+func logServerError(message string, err error) {
+	if err != nil {
+		log.Printf("%s: %v", message, err)
+	}
+}
+
 // tasksHandler обрабатывает запросы для получения списка задач
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		writeJson(w, http.StatusMethodNotAllowed, map[string]any{"error": "unsupported method"})
 		return
 	}
 
 	// Получение списка задач из базы данных
 	tasks, err := db.Tasks(50) // Максимум 50 записей
 	if err != nil {
-		writeJson(w, map[string]any{"error": "failed to fetch tasks"})
+		writeJson(w, http.StatusInternalServerError, map[string]any{"error": "failed to fetch tasks"})
 		return
 	}
 
@@ -28,10 +35,10 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Возвращаем список задач в формате JSON
-	writeJson(w, map[string]any{"tasks": tasks})
+	writeJson(w, http.StatusOK, map[string]any{"tasks": tasks})
 }
 
-// taskHandler обрабатывает добавление задачи
+// taskHandler обрабатывает запросы для задач
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -43,119 +50,111 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		deleteTaskHandle(w, r)
 	default:
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		writeJson(w, http.StatusMethodNotAllowed, map[string]any{"error": "unsupported method"})
 	}
 }
 
 func getTaskHandle(w http.ResponseWriter, r *http.Request) {
-	// Получение параметра id из URL
 	id := r.URL.Query().Get("id")
 	if id == "" {
-		writeJson(w, map[string]any{"error": "Не указан идентификатор"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "Не указан идентификатор"})
 		return
 	}
 
-	// Получение задачи из базы данных
 	task, err := db.GetTask(id)
 	if err != nil {
-		writeJson(w, map[string]any{"error": "Задача не найдена"})
+		writeJson(w, http.StatusNotFound, map[string]any{"error": "Задача не найдена"})
 		return
 	}
 
-	// Возврат задачи в JSON формате
-	writeJson(w, task)
+	writeJson(w, http.StatusOK, task)
 }
 
 func updateTaskHandle(w http.ResponseWriter, r *http.Request) {
 	var task db.Task
 
-	// Десериализация JSON
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-		writeJson(w, map[string]any{"error": "invalid JSON"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON"})
 		return
 	}
 
-	// Проверка идентификатора
 	if task.ID == "" {
-		writeJson(w, map[string]any{"error": "Не указан идентификатор"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "Не указан идентификатор"})
 		return
 	}
 
-	// Проверка данных
 	if task.Title == "" {
-		writeJson(w, map[string]any{"error": "title is required"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "title is required"})
 		return
 	}
 
 	if err := checkDate(&task); err != nil {
-		writeJson(w, map[string]any{"error": err.Error()})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
-	// Обновление задачи в базе данных
 	if err := db.UpdateTask(&task); err != nil {
-		writeJson(w, map[string]any{"error": err.Error()})
+		logServerError("Failed to update task in database", err)
+		writeJson(w, http.StatusInternalServerError, map[string]any{"error": "Internal server error"})
 		return
 	}
 
-	// Возврат успешного ответа
-	writeJson(w, map[string]any{})
+	writeJson(w, http.StatusOK, map[string]any{})
 }
 
 func taskDoneHandle(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
-		writeJson(w, map[string]any{"error": "Не указан идентификатор"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "Не указан идентификатор"})
 		return
 	}
 
-	// Получение задачи по идентификатору
 	task, err := db.GetTask(id)
 	if err != nil {
-		writeJson(w, map[string]any{"error": "Задача не найдена"})
+		writeJson(w, http.StatusNotFound, map[string]any{"error": "Задача не найдена"})
 		return
 	}
 
-	// Если повтор отсутствует, удаляем задачу
 	if task.Repeat == "" {
 		if err := db.DeleteTask(id); err != nil {
-			writeJson(w, map[string]any{"error": "Ошибка при удалении задачи"})
+			logServerError("Failed to delete task", err)
+			writeJson(w, http.StatusInternalServerError, map[string]any{"error": "Internal server error"})
 			return
 		}
-		writeJson(w, map[string]any{}) // Успешное удаление
+
+		writeJson(w, http.StatusOK, map[string]any{})
 		return
 	}
 
-	// Вычисление следующей даты
 	nextDate, err := scheduler.NextDate(time.Now(), task.Date, task.Repeat)
 	if err != nil {
-		writeJson(w, map[string]any{"error": "Ошибка при вычислении следующей даты"})
+		writeJson(w, http.StatusInternalServerError, map[string]any{"error": "Ошибка при вычислении следующей даты"})
 		return
 	}
 
-	// Обновление даты задачи
 	if err := db.UpdateDate(nextDate, id); err != nil {
-		writeJson(w, map[string]any{"error": "Ошибка при обновлении даты"})
+		logServerError("Failed to update task date", err)
+		writeJson(w, http.StatusInternalServerError, map[string]any{"error": "Internal server error"})
 		return
 	}
 
-	writeJson(w, map[string]any{}) // Успешное завершение
+	writeJson(w, http.StatusOK, map[string]any{})
 }
 
 func deleteTaskHandle(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
-		writeJson(w, map[string]any{"error": "Не указан идентификатор"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "Не указан идентификатор"})
 		return
 	}
 
-	// Удаление задачи
 	if err := db.DeleteTask(id); err != nil {
-		writeJson(w, map[string]any{"error": "Ошибка при удалении задачи"})
+		logServerError("Failed to delete task", err)
+		writeJson(w, http.StatusInternalServerError, map[string]any{"error": "Internal server error"})
 		return
 	}
 
-	writeJson(w, map[string]any{}) // Успешное завершение
+	writeJson(w, http.StatusOK, map[string]any{})
 }
 
 // Init регистрирует маршруты API

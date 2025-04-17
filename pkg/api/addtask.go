@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -16,31 +17,31 @@ func addTaskHandle(w http.ResponseWriter, r *http.Request) {
 
 	// Десериализация JSON
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-		writeJson(w, map[string]any{"error": "invalid JSON"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON"})
 		return
 	}
 
 	// Проверка заголовка
 	if task.Title == "" {
-		writeJson(w, map[string]any{"error": "title is required"})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": "title is required"})
 		return
 	}
 
 	// Проверка даты
 	if err := checkDate(&task); err != nil {
-		writeJson(w, map[string]any{"error": err.Error()})
+		writeJson(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
 	// Добавление задачи
 	id, err := db.AddTask(&task)
 	if err != nil {
-		writeJson(w, map[string]any{"error": "database error"})
+		writeJson(w, http.StatusInternalServerError, map[string]any{"error": "database error"})
 		return
 	}
 
 	// Возвращаем ID добавленной задачи
-	writeJson(w, map[string]any{"id": id})
+	writeJson(w, http.StatusOK, map[string]any{"id": id})
 }
 
 // checkDate проверяет и корректирует дату в задаче
@@ -72,10 +73,11 @@ func checkDate(task *db.Task) error {
 }
 
 // writeJson отправляет JSON-ответ
-func writeJson(w http.ResponseWriter, data any) {
+func writeJson(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error":"failed to encode JSON"}`)
+		log.Printf("Failed to encode JSON response: %v", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }
